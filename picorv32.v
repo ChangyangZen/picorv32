@@ -376,8 +376,16 @@ module picorv32 #(
 	wire mem_done = resetn && ((mem_xfer && |mem_state && (mem_do_rinst || mem_do_rdata || mem_do_wdata)) || (&mem_state && mem_do_rinst)) &&
 			(!mem_la_firstword || (~&mem_rdata_latched[1:0] && mem_xfer));
 
-	assign mem_la_write = resetn && !mem_state && mem_do_wdata;
-	assign mem_la_read = resetn && ((!mem_la_use_prefetched_high_word && !mem_state && (mem_do_rinst || mem_do_prefetch || mem_do_rdata)) ||
+	// A misaligned load/store that traps (CATCH_MISALIGN, bus-error IRQ not taken) is
+	// detected in the cycle its bus access would start. Hold the access back so that
+	// it never reaches the native or look-ahead interface: the store must not write
+	// memory, and the load must not read it.
+	wire mem_misaligned_trap = CATCH_MISALIGN && (mem_do_rdata || mem_do_wdata) &&
+			((mem_wordsize == 0 && reg_op1[1:0] != 0) || (mem_wordsize == 1 && reg_op1[0] != 0)) &&
+			!(ENABLE_IRQ && !irq_mask[irq_buserror] && !irq_active);
+
+	assign mem_la_write = resetn && !mem_state && mem_do_wdata && !mem_misaligned_trap;
+	assign mem_la_read = resetn && ((!mem_la_use_prefetched_high_word && !mem_state && (mem_do_rinst || mem_do_prefetch || (mem_do_rdata && !mem_misaligned_trap))) ||
 			(COMPRESSED_ISA && mem_xfer && (!last_mem_valid ? mem_la_firstword : mem_la_firstword_reg) && !mem_la_secondword && &mem_rdata_latched[1:0]));
 	assign mem_la_addr = (mem_do_prefetch || mem_do_rinst) ? {next_pc[31:2] + mem_la_firstword_xfer, 2'b00} : {reg_op1[31:2], 2'b00};
 
@@ -580,13 +588,13 @@ module picorv32 #(
 			end
 			case (mem_state)
 				0: begin
-					if (mem_do_prefetch || mem_do_rinst || mem_do_rdata) begin
+					if (mem_do_prefetch || mem_do_rinst || (mem_do_rdata && !mem_misaligned_trap)) begin
 						mem_valid <= !mem_la_use_prefetched_high_word;
 						mem_instr <= mem_do_prefetch || mem_do_rinst;
 						mem_wstrb <= 0;
 						mem_state <= 1;
 					end
-					if (mem_do_wdata) begin
+					if (mem_do_wdata && !mem_misaligned_trap) begin
 						mem_valid <= 1;
 						mem_instr <= 0;
 						mem_state <= 2;
