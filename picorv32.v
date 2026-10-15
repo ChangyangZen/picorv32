@@ -891,6 +891,11 @@ module picorv32 #(
 			decoded_rs1 <= mem_rdata_latched[19:15];
 			decoded_rs2 <= mem_rdata_latched[24:20];
 
+			// MISC-MEM (FENCE): rd is reserved and must be ignored. Without this, FENCE
+			// takes the ALU path and writes the undefined alu_out ('bx) to a nonzero rd.
+			if (mem_rdata_latched[6:0] == 7'b0001111)
+				decoded_rd <= 0;
+
 			if (mem_rdata_latched[6:0] == 7'b0001011 && mem_rdata_latched[31:25] == 7'b0000000 && ENABLE_IRQ && ENABLE_IRQ_QREGS)
 				decoded_rs1[regindex_bits-1] <= 1; // instr_getq
 
